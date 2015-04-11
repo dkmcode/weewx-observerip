@@ -40,8 +40,8 @@ if weewx.__version__ < "3":
                                    weewx.__version__)
 
 def logmsg(dst, msg):
-    #syslog.syslog(dst, 'observerip: %s' % msg)
-    sys.stdout.write('observerip: %s\n' % msg)
+    syslog.syslog(dst, 'observerip: %s' % msg)
+    #sys.stdout.write('observerip: %s\n' % msg)
 
 def logdbg(msg):
     logmsg(syslog.LOG_DEBUG, msg)
