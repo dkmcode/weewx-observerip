@@ -11,6 +11,8 @@ INSTALLATION
    [Station]
 	station_type = ObserverIP
 
+   For other configuration options run
+	bin/wee_config_device weewx.conf --defaultconfig
 
 3) restart weewx
 
