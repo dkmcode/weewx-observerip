@@ -1,21 +1,7 @@
 #!/usr/bin/python
-# $Id: wlink.py 1229 2015-01-27 20:16:18Z mwall $
-# Copyright 2014 Matthew Wall
 """weewx driver for Ambient ObserverIP
 
-To use this driver:
-
-1) copy this file to the weewx user directory
-
-   cp observerip.py /home/weewx/bin/user
-
-2) configure weewx.conf
-
-[Station]
-    ...
-    station_type = ObserverIP
-[ObserverIP]
-    driver = user.observerip
+To use this driver: see readme.txt
 """
 
 
@@ -69,27 +55,29 @@ class OpserverIPHardware():
     Interface to communicate directly with ObserverIP
     """
 
-    def __init__(self,ip=None, **stn_dict):
+    def __init__(self, **stn_dict):
         self.versionmap = {'wh2600USA_v2.2.0',('3.0.0')}
+        self.hostname = stn_dict.get('hostname',None)
 
         self.max_tries = int(stn_dict.get('max_tries', 5))
         self.retry_wait = int(stn_dict.get('retry_wait', 2))
         self.infopacket = None
-        self.infopacket = self.infoprobe(ip)
+        self.infopacket = self.infoprobe()
         if not self.infopacket:
             #shoud raise exception
-            sys.exit('ObserverIP network probe failed')
+            logerr('ObserverIP network probe failed')
+            exit(1)
 
-    def infoprobe(self, ip=None):
-        if ip:
-            UDP_IP = ip
+    def infoprobe(self):
+        if self.hostname:
+            UDP_IP = self.hostname
         else:
             UDP_IP = "255.255.255.255"
         UDP_PORT = 25122
         MESSAGE = "ASIXXISA\x00"
         sock = socket.socket(socket.AF_INET, # Internet
                              socket.SOCK_DGRAM) # UDP
-        if not ip:
+        if not self.hostname:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         for count in range(self.max_tries):
             try:
@@ -99,10 +87,10 @@ class OpserverIPHardware():
                 return recv_data
                 break
             except socket.timeout:
-                print "timeout %d" % count
-                count +1
+                loginf("socket timeout %d of %d" % (count+1, self.max_tries))
             except socket.gaierror:
-                sys.exit("%s: incorrect hostname or IP" % ip)
+                logerr("%s: incorrect hostname or IP" % self.hostname)
+                return None
         else:
             return None
 
@@ -230,16 +218,17 @@ class OpserverIPHardware():
         response = urllib2.urlopen("http://%s/bscsetting.htm" % self.ipaddr(),
                                    self.dict_to_param(calibdata) + "&Apply=Apply")
     def setnetworkdefault(self):
-        print 'Not implemented'
+        #print 'Not implemented'
+        pass
     def reboot(self, wait=True):
-        print 'Not implemented'
+        #print 'Not implemented'
         if wait:
             self.infopacket = None
             self.infopacket = self.infoprobe()
-            if self.infopacket:
-                print 'reboot succeded'
-            else:
-                print 'cant find station'
+            #if self.infopacket:
+            #    print 'reboot succeded'
+            #else:
+            #    print 'cant find station'
 
     def getidpasswd(self):
         return self.page_to_dict('http://%s/weather.htm' % self.ipaddr())
@@ -261,13 +250,13 @@ class OpserverIPHardware():
     def getcalibration(self):
         return self.page_to_dict('http://%s/correction.htm' % self.ipaddr())
     def setcalibration(self, calibdata):
-        print self.dict_to_param(calibdata)
+        #print self.dict_to_param(calibdata)
         response = urllib2.urlopen("http://%s/correction.htm" % self.ipaddr(),
                                    self.dict_to_param(calibdata) + "&Apply=Apply")
     def setcalibrationdefault(self):
-        print "defaults"
+        #print "defaults"
         response = urllib2.urlopen('http://%s/msgcoredef.htm' % self.ipaddr())
-        print response.read()
+        #print response.read()
 
 # =============================================================================
 
@@ -340,7 +329,7 @@ class ObserverIP(weewx.drivers.AbstractDevice):
         }
                 
         if (self.directtx):
-            self.obshardware = OpserverIPHardware()
+            self.obshardware = OpserverIPHardware(**stn_dict)
             if self.obshardware.version() in self.directmap:
                 self.map = self.directmap[self.obshardware.version()]
             else:
@@ -349,7 +338,7 @@ class ObserverIP(weewx.drivers.AbstractDevice):
         else:
             self.map = self.directmap['wu']
             if self.check_calibration:
-                self.obshardware = OpserverIPHardware()
+                self.obshardware = OpserverIPHardware(**stn_dict)
 
         if 'calibration' in stn_dict and self.check_calibration:
             self.chkcalib(stn_dict['calibration'])
@@ -449,7 +438,9 @@ class ObserverIP(weewx.drivers.AbstractDevice):
         stcalib = self.obshardware.getcalibration()
         for i in calibdata:
             if(to_float(calibdata[i]) != to_float(stcalib[i])):
-                sys.exit("calibration error")
+                logerr("calibration error: %s is expexted to be %f but is %f" % 
+                          (i, to_float(calibdata[i]), to_float(stcalib[i])))
+                exit(1)
 
 
 # =============================================================================
@@ -529,216 +520,45 @@ class ObserverIPConfigurator(weewx.drivers.AbstractConfigurator):
     def add_options(self, parser):
         super(ObserverIPConfigurator, self).add_options(parser)
 
-        parser.add_option("--scan", dest="scan",
+        parser.add_option("--findobserver", dest="findobserver",
                           action="store_true",
-                          help="Print probe information from ObserverIP")
+                          help="Find the observerIP on the network")
 
         parser.add_option("--getdata", dest="getdata",
                           action="store_true",
                           help="print weather data from the station")
 
-        parser.add_option("--readable", dest="readable",
-                          action="store_true",
-                          help="Return readable values")
-
-        parser.add_option("--getnetwork", dest="getnetwork",
-                          action="store_true",
-                          help="print network settings from the station")
-        parser.add_option("--setnetwork", dest="setnetwork",
-                          action="store_true",
-                          help="set network settings for the station")
-
-        parser.add_option("--getidpassword", dest="getidpassword",
-                          action="store_true",
-                          help="print the Weather Underground ID and password from the station")
-        parser.add_option("--setpasswd", dest="setpasswd",
-                          action="store_true",
-                          help="set Weather Underground ID and/or password on ObserverIP")
-        parser.add_option("--wuid", dest="wuid",
-                          help="    Weather Underground ID")
-        parser.add_option("--wupasswd", dest="wupasswd",
-                          help="    Weather Underground password")
-
-        parser.add_option("--getstationsettings", dest="getstationsettings",
-                          action="store_true",
-                          help="get station settings for ObserverIP")
-        parser.add_option("--setstationsettings", dest="setstationsettings",
-                          action="store_true",
-                          help="set station settings for ObserverIP")
-        parser.add_option("--dst", dest="dst",
-                          help="    set daylight saving time")
-        parser.add_option("--timezone", dest="timezone",
-                          help="    set timezone")
-
-        parser.add_option("--getcalibration", dest="getcalib",
-                          action="store_true",
-                          help="list corrections")
-        parser.add_option("--setcalibrationdefaults", dest="setcalibdef",
-                          action="store_true",
-                          help="set calibration defaults for ObserverIP")
-        parser.add_option("--setcalibration", dest="setcalib",
-                          action="store_true",
-                          help="set station corrections")
-        parser.add_option("--raingain", dest="raingain",
-                          help="    set station corrections")
-        parser.add_option("--winddiroffset", dest="winddiroffset",
-                          help="    set station corrections")
-        parser.add_option("--inhumioffset", dest="inhumioffset",
-                          help="    set station corrections")
-        parser.add_option("--absoffset", dest="absoffset",
-                          help="    set station corrections")
-        parser.add_option("--uvgain", dest="uvgain",
-                          help="    set station corrections")
-        parser.add_option("--solargain", dest="solargain",
-                          help="    set station corrections")
-        parser.add_option("--windgain", dest="windgain",
-                          help="    set station corrections")
-        parser.add_option("--reloffset", dest="reloffset",
-                          help="    set station corrections")
-        parser.add_option("--luxwm2", dest="luxwm2",
-                          help="    set station corrections")
-        parser.add_option("--outhumioffset", dest="outhumioffset",
-                          help="    set station corrections")
-        parser.add_option("--outtempoffset", dest="outtempoffset",
-                          help="    set station corrections")
-        parser.add_option("--intempoffset", dest="intempoffset",
-                          help="    set station corrections")
-
-
-        parser.add_option("--reboot", dest="reboot",
-                          action="store_true",
-                          help="reboot the ObserverIP")
-
         parser.add_option("--defaultconfig", dest="defconf",
                           action="store_true",
                           help="show the default configuration for weewx.conf")
 
-    def do_options1(self, options, parser, config_dict, prompt):
-        pass
-
     def do_options(self, options, parser, config_dict, prompt):
-        obshardware = OpserverIPHardware()
         driver_dict=config_dict['ObserverIP']
-        self.xferfile=driver_dict['xferfile']
-        with open(self.xferfile,'r') as f:
-            for line in f:
-                try:
-                    line.index('observerip=')
-                    eq_index = line.index('=')
-                    self.observerloc=line[eq_index + 1:].strip()
-                    break
-                except:
-                    pass
-        if options.getnetwork:
-            data=obshardware.getnetworksettings(options.readable)
-            for obs in data:
-                sys.stdout.write("%s=%s\n" % (obs, data[obs]))
+        obshardware = OpserverIPHardware(**driver_dict)
 
-        if options.getidpassword:
-            data=obshardware.getidpasswd()
-            for obs in data:
-                sys.stdout.write("%s=%s\n" % (obs, data[obs]))
-        if options.setpasswd:
-            if not options.wuid and not options.wupasswd:
-                print 'nothing to set'
-            else:
-                if not options.wuid or not options.wupasswd:
-                    data=obshardware.getidpasswd()
-                    if not options.wuid: options.wuid = data['stationID']
-                    if not options.wupasswd: options.wupasswd = data['stationPW']
-                if self.areyousure(prompt, 'This will set the Weather Undergroung password on the ObserverIP'):
-                    obshardware.setidpasswd(options.wuid, options.wupasswd)
-
-        if options.getstationsettings:
-            data=obshardware.getstationsettings(options.readable)
-            for obs in data:
-                sys.stdout.write("%s=%s\n" % (obs, data[obs]))
-        if options.setstationsettings:
-            data=obshardware.getstationsettings(options.readable)
-            if options.dst: data['dst']=options.dst
-            if options.timezone: data['timezone']=options.timezone
-            if self.areyousure(prompt, 'This will change the station settings'):
-                obshardware.setstationsettings(data)
+        if options.findobserver:
+            sys.stdout.write("http://%s\n" % obshardware.ipaddr())
+            try:
+                hostname = socket.gethostbyaddr(obshardware.ipaddr())[0]
+                print "or"
+                sys.stdout.write("http://%s\n" % hostname)
+            except:
+                pass
 
         if options.getdata:
             data=obshardware.data()
             for obs in data:
                 sys.stdout.write("%s=%s\n" % (obs, data[obs]))
 
-        if options.getcalib:
-            data = obshardware.getcalibration()
-            for obs in data:
-                sys.stdout.write("%s=%s\n" % (obs, data[obs]))
-            cf = driver_dict['calibration']
-            for i in cf:
-                if(to_float(cf[i]) != to_float(data[i])):
-                    print i
-        if options.setcalibdef:
-            if self.areyousure(prompt, 'This will set the default calibration values on the ObserverIP'):
-                obshardware.setcalibrationdefault()
-        if options.setcalib:
-            data = obshardware.getcalibration()
-            if options.raingain: data['RainGain'] = options.raingain
-            if options.winddiroffset: data['windDirOffset'] = options.winddiroffset
-            if options.inhumioffset: data['inHumiOffset'] = options.inhumioffset
-            if options.absoffset: data['AbsOffset'] = options.absoffset
-            if options.uvgain: data['UVGain'] = options.uvgain
-            if options.solargain: data['SolarGain'] = options.solargain
-            if options.windgain: data['WindGain'] = options.windgain
-            if options.reloffset: data['RelOffset'] = options.reloffset
-            if options.luxwm2: data['luxwm2'] = options.luxwm2
-            if options.outhumioffset: data['outHumiOffset'] = options.outhumioffset
-            if options.outtempoffset: data['outTempOffset'] = options.outtempoffset
-            if options.intempoffset: data['inTempOffset'] = options.intempoffset
-            if self.areyousure(prompt, 'This will set calibration values on the ObserverIP'):
-                obshardware.setcalibration(data)
-
         if options.defconf:
             stconf = ObserverIPConfEditor()
-            if hasattr(stconf, 'default_stanza'):
-                print stconf.default_stanza
-            else:
-                print "cant"
-        if options.scan:
-            print
-
-            sys.stdout.write("Network Initialization:  ")
-            if obshardware.dhcp():
-                print 'DHCP'
-            else:
-                print 'STATIC'
-
-            try:
-                print "Hostname:                %s" % socket.gethostbyaddr(obshardware.ipaddr())[0]
-            except:
-                print 'Unknown Hostname'
-
-            sys.stdout.write("Current IP:              %s\n" % obshardware.ipaddr())
-            sys.stdout.write("Static IP:               %s\n" % obshardware.staticipaddr())
-            sys.stdout.write("Unknown Port:            %s\n" % obshardware.portuk())
-            sys.stdout.write("Unknown Port:            %s\n" % obshardware.porta())
-            sys.stdout.write("Probe Port:              %s\n" % obshardware.portb())
-            sys.stdout.write("Server Listening Port:   %s\n" % obshardware.port())
-            sys.stdout.write("Netmask:                 %s\n" % obshardware.netmask())
-            sys.stdout.write("Gateway:                 %s\n" % obshardware.staticgateway())
-            sys.stdout.write("DNS Server:              %s\n" % obshardware.staticdns())
-            sys.stdout.write("Update Host:             %s\n" % obshardware.updatehost())
-            sys.stdout.write("Unknown IP:              %s\n" % obshardware.ipaddruk())
-            sys.stdout.write("Firmware Version String: %s\n" % obshardware.version())
-
-        if options.reboot:
-            if self.areyousure(prompt,'This will reboot the ObserverIP'):
-                obshardware.reboot()
+            print stconf.default_stanza
 
     def areyousure(self, prompt=True, msg=''):
         if prompt:
             print msg
             ans = ''
             while ans not in ['y', 'n']:
-                print"This program does not check validity of values."
-                print"Please know exactly what you are doing"
-                print"Otherwise please use the web interface to change the configuration"
-                print"The consequences of not knowing could brick you weatherstation"
                 ans = raw_input("Are you sure you wish to proceed (y/n)? ")
                 if ans == 'y':
                     return True
@@ -752,7 +572,7 @@ class ObserverIPConfigurator(weewx.drivers.AbstractConfigurator):
 # =============================================================================
 
 # To test this driver, do the following:
-#   PYTHONPATH=/home/dave/weewx/bin python /home/dave/weewx/bin/user/observerip.py
+#   PYTHONPATH=/home/weewx/bin python /home/weewx/bin/user/observerip.py
 if __name__ == "__main__":
     usage = """%prog [options]"""
     import optparse
