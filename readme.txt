@@ -27,3 +27,4 @@ the path in that file is reasonable. Create directory /var/www/weatherstation.
 Copy util/apache/weatherstation/updateweatherstation.php to /var/www/weatherstation.
 Edit both the updateweatherstation.php and weewx.conf. Set xferfile in each to point
 to the same file. The file must be writable by the web server and readable by weewx.
+Relative Pressure Offset in the calibration tab of the station setup must be set to 0.
