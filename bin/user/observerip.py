@@ -2,6 +2,8 @@
 """weewx driver for Ambient ObserverIP
 
 To use this driver: see readme.txt
+For the default configuration see the  ObserverIPConfEditor class or run
+   bin/wee_config_device weewx.conf --defaultconfig
 """
 
 
@@ -26,8 +28,8 @@ if weewx.__version__ < "3":
                                    weewx.__version__)
 
 def logmsg(dst, msg):
-    syslog.syslog(dst, 'observerip: %s' % msg)
-    #sys.stdout.write('observerip: %s\n' % msg)
+    #syslog.syslog(dst, 'observerip: %s' % msg)
+    sys.stdout.write('observerip: %s\n' % msg)
 
 def logdbg(msg):
     logmsg(syslog.LOG_DEBUG, msg)
@@ -57,6 +59,19 @@ class OpserverIPHardware():
 
     def __init__(self, **stn_dict):
         self.versionmap = {'wh2600USA_v2.2.0',('3.0.0')}
+        self.calibrationbound = {'RainGain': (to_float, 0.1, 5.0),
+                                 'AbsOffset': (to_float, -23.62, 23.62),
+                                 'outTempOffset': (to_float, -18.0, 18.0),
+                                 'windDirOffset': (to_float, -180.0, 180.0),
+                                 'luxwm2': (to_float, 1.0, 1000.0),
+                                 'SolarGain': (to_float, 0.1, 5.0),
+                                 'WindGain': (to_float, 0.1, 5.0),
+                                 'inTempOffset': (to_float, -18.0, 18.0),
+                                 'UVGain': (to_float, 0.1, 5.0),
+                                 'outHumiOffset': (to_float, -10.0, 10.0),
+                                 'inHumiOffset': (to_float, -10.0, 10.0),
+                                 'RelOffset': (to_float, -23.62, 23.62)
+                             }
         self.hostname = stn_dict.get('hostname',None)
 
         self.max_tries = int(stn_dict.get('max_tries', 5))
@@ -64,7 +79,7 @@ class OpserverIPHardware():
         self.infopacket = None
         self.infopacket = self.infoprobe()
         if not self.infopacket:
-            #shoud raise exception
+            #should raise exception
             logerr('ObserverIP network probe failed')
             exit(1)
 
@@ -212,6 +227,16 @@ class OpserverIPHardware():
             param = param + "%s=%s" % (i,dict[i])
         return param
 
+    def boundcheck(self, bound, data):
+        for i in data:
+            if i in bound:
+                if ( bound[i][0](data[i]) < bound[i][0](bound[i][1]) or bound[i][0](data[i]) > bound[i][0](bound[i][2])):
+                    logerr("%s bound error: range: %s-%s value: %s" % (i, bound[i][1], bound[i][2], data[i] ))
+                    exit(1)
+            else:
+                logerr("%s not bound" % i)
+                exit(1)
+
     def getnetworksettings(self,Readable=False):
         return self.page_to_dict('http://%s/bscsetting.htm' % self.ipaddr(),not Readable)
     def setnetworksettings(self):
@@ -250,9 +275,10 @@ class OpserverIPHardware():
     def getcalibration(self):
         return self.page_to_dict('http://%s/correction.htm' % self.ipaddr())
     def setcalibration(self, calibdata):
-        #print self.dict_to_param(calibdata)
-        response = urllib2.urlopen("http://%s/correction.htm" % self.ipaddr(),
-                                   self.dict_to_param(calibdata) + "&Apply=Apply")
+        self.boundcheck(self.calibrationbound ,calibdata)
+        print self.dict_to_param(calibdata)
+        #response = urllib2.urlopen("http://%s/correction.htm" % self.ipaddr(),
+        #                           self.dict_to_param(calibdata) + "&Apply=Apply")
     def setcalibrationdefault(self):
         #print "defaults"
         response = urllib2.urlopen('http://%s/msgcoredef.htm' % self.ipaddr())
@@ -275,9 +301,15 @@ class ObserverIP(weewx.drivers.AbstractDevice):
         self.retry_wait = int(stn_dict.get('retry_wait', 2))
         self.directtx = to_bool(stn_dict.get('direct', False))
         self.check_calibration = to_bool(stn_dict.get('check_calibration',False))
+        self.set_calibration = to_bool(stn_dict.get('set_calibration', False))
 
         self.lastrain = None
         self.lastpacket = 0
+        self.expected_units = {'unit_Wind': 'mph',
+                               'u_Rainfall': 'in',
+                               'unit_Pressure': 'inhg',
+                               'u_Temperature': 'degF',
+                               'unit_Solar': 'w/m2'}
         self.directmap = {
             'wh2600USA_v2.2.0' : {
                 'dateTime' : ('epoch', to_int),
@@ -330,6 +362,10 @@ class ObserverIP(weewx.drivers.AbstractDevice):
                 
         if (self.directtx):
             self.obshardware = OpserverIPHardware(**stn_dict)
+            if self.chkunits(self.expected_units):
+                logerr("calibration error: %s is expexted to be %f but is %f" % 
+                          (i, to_float(calibdata[i]), to_float(stcalib[i])))
+                exit(1)
             if self.obshardware.version() in self.directmap:
                 self.map = self.directmap[self.obshardware.version()]
             else:
@@ -339,10 +375,19 @@ class ObserverIP(weewx.drivers.AbstractDevice):
             self.map = self.directmap['wu']
             if self.check_calibration:
                 self.obshardware = OpserverIPHardware(**stn_dict)
+                if self.chkunits(self.expected_units):
+                    exit(1)
 
         if 'calibration' in stn_dict and self.check_calibration:
-            self.chkcalib(stn_dict['calibration'])
-
+            if self.chkcalib(stn_dict['calibration']):
+                if(self.set_calibration):
+                    self.obshardware.setcalibration(stn_dict['calibration'])
+                    if self.chkcalib(stn_dict['calibration']):
+                        logerr("Setting calibration unsuccessful")
+                        exit(1)
+                else:
+                    exit(1)
+                
         loginf("polling interval is %s" % self.poll_interval)
 
     @property
@@ -439,8 +484,19 @@ class ObserverIP(weewx.drivers.AbstractDevice):
         for i in calibdata:
             if(to_float(calibdata[i]) != to_float(stcalib[i])):
                 logerr("calibration error: %s is expexted to be %f but is %f" % 
-                          (i, to_float(calibdata[i]), to_float(stcalib[i])))
-                exit(1)
+                       (i, to_float(calibdata[i]), to_float(stcalib[i])))
+                return True
+        return False
+
+    def chkunits(self, bound):
+        data = self.obshardware.getstationsettings(True);
+        for i in bound:
+            if i in data:
+                if ( bound[i] != data[i]):
+                    logerr("%s expexted in unit %s but is in %s" % (i, bound[i], data[i]))
+                    return True
+        return False
+
 
 
 # =============================================================================
@@ -453,6 +509,8 @@ class ObserverIPConfEditor(weewx.drivers.AbstractConfEditor):
         return """
 [ObserverIP]
     # This section is for the weewx ObserverIP driver
+
+    # hostname - hostname or IP address of the ObserverIP, not required
 
     # direct is the method for obtaining the data from the station
     # 	   direct - communicate directly with the station
@@ -472,7 +530,7 @@ class ObserverIPConfEditor(weewx.drivers.AbstractConfEditor):
     # xferfile
     #	direct=true  - unused
     #	direct=false - file where the CGI script puts the data from the observerip
-    xferfile = /net/athene/tmp/hacktest
+    xferfile = /path/to/transfer/file
 
     # retry_wait - time to wait after failed network attempt
 
@@ -486,7 +544,8 @@ class ObserverIPConfEditor(weewx.drivers.AbstractConfEditor):
     # The driver to use:
     driver = user.observerip
 
-    # The calibration the driver expects from the station, only useful if check_calibration is set
+    # The calibration the driver expects from the station, only useful if check_calibration is set. Items that are not set,
+    # are not checked
     [[calibration]]
 	RainGain=1.00
 	windDirOffset=0
@@ -495,7 +554,7 @@ class ObserverIPConfEditor(weewx.drivers.AbstractConfEditor):
 	UVGain=1.00
 	SolarGain=1.00
 	WindGain=1.00
-	RelOffset=0.00
+	#RelOffset=0.00
 	luxwm2=126.7
 	outHumiOffset=0
 	outTempOffset=0.0
@@ -504,8 +563,6 @@ class ObserverIPConfEditor(weewx.drivers.AbstractConfEditor):
 
 
 # =============================================================================
-#  This class needs some features added and alot of cleanup
-#  but does not effect the operation of the driver 
 
 
 class ObserverIPConfigurator(weewx.drivers.AbstractConfigurator):
